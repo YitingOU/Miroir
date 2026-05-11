@@ -54,8 +54,10 @@ Classify the user's input:
 Ask at most three clarifying questions. If the user says "just do it", default to:
 
 - Comprehensive agent
-- Current workspace output under `openclaw-workspace/[agent-name]/`
-- No installation into a live OpenClaw workspace unless explicitly requested
+- Final output target: `FINAL_ROOT=~/openclaw-workspace/[agent-name]`
+- Staging build target: `BUILD_ROOT=~/openclaw-workspace/.staging/[agent-name]-[run-id]`
+- Install the validated staged agent into the live OpenClaw workspace
+- Create a new unique final agent directory unless the user explicitly asks to update an existing agent
 - Public research plus any local material already provided
 
 Minimum clarification targets:
@@ -64,12 +66,24 @@ Minimum clarification targets:
 2. **Runtime use:** conversational persona, operational assistant, coding orchestrator, monitoring agent, or hybrid.
 3. **Source material:** public web, local files, existing skill, existing OpenClaw agent, or user-provided notes.
 
-### Phase 0.5: Create The Output Skeleton
+### Phase 0.5: Create The Staging Skeleton
 
-Create the target agent directory before research starts:
+Create a staging build root before research starts. Use two explicit path variables:
+
+- `RUN_ID=[timestamp-or-random-suffix]`
+- `BUILD_ROOT=~/openclaw-workspace/.staging/[agent-name]-[run-id]`
+- `FINAL_ROOT=~/openclaw-workspace/[agent-name]`
+
+`BUILD_ROOT` and `FINAL_ROOT` must live under `~/openclaw-workspace/` so the final install can
+use a same filesystem rename. Do not reuse a staging directory; every run gets a new `RUN_ID`.
+OpenClaw runtime must ignore `~/openclaw-workspace/.staging/`. If that ignore behavior is not
+guaranteed, use another non-scanned staging directory on the same filesystem and stop and ask
+before writing a live staging directory.
+
+Build and research inside the staging root:
 
 ```
-openclaw-workspace/[agent-name]/
+$BUILD_ROOT/
 ├── IDENTITY.md
 ├── SOUL.md
 ├── AGENTS.md
@@ -80,6 +94,21 @@ openclaw-workspace/[agent-name]/
 ├── references/research/
 └── memory/
 ```
+
+Do not create or modify the final live agent directory until the staging build passes validation.
+This prevents OpenClaw from seeing a half-built agent after an interrupted run.
+
+Do not stop at a project-local export. The normal result of persona distillation is a new
+OpenClaw agent directory under `~/openclaw-workspace/`, with distilled information written
+directly into the agent's startup files and `references/research/` evidence notes.
+
+If `FINAL_ROOT=~/openclaw-workspace/[agent-name]` already exists and the user did not ask to
+update it, choose a new `FINAL_ROOT` such as `~/openclaw-workspace/[agent-name]-2` or a more
+specific slug before creating any live directory. Never overwrite an existing agent workspace
+silently.
+
+Use project-local `./openclaw-workspace/[agent-name]/` only when the user explicitly asks for
+an export-only copy, a dry run, or the live OpenClaw workspace cannot be resolved.
 
 If converting an existing skill, also create:
 
@@ -222,7 +251,7 @@ Default file behavior:
 Run:
 
 ```bash
-python3 scripts/quality_check.py openclaw-workspace/[agent-name]
+python3 scripts/quality_check.py "$BUILD_ROOT"
 ```
 
 Validation must check:
@@ -239,17 +268,51 @@ Validation must check:
 If validation fails, patch the files and rerun. If a failure is due to legitimately missing
 source material, document that limitation in `SOUL.md` and `AGENTS.md`.
 
-### Phase 5: Install Or Export
+### Phase 5: Finalize The Agent Workspace
 
-Default: leave the agent under `openclaw-workspace/[agent-name]/` in the project and report the path.
+Default: leave the finished agent in the live OpenClaw workspace at
+`FINAL_ROOT=~/openclaw-workspace/[agent-name]` and report that path.
 
-Only install into a live OpenClaw workspace when the user explicitly asks. Before installing:
+Before finishing, choose the correct path:
 
-1. Resolve the workspace root, normally `~/openclaw-workspace/[agent-name]/`.
-2. Check whether that agent folder already exists.
-3. If it exists, update surgically instead of overwriting.
-4. Never copy secrets, auth files, sessions, or runtime state.
-5. Run validation after installation.
+1. Resolve `FINAL_ROOT`, normally `~/openclaw-workspace/[agent-name]`.
+2. Check whether that final agent folder already existed before this run.
+3. Never copy secrets, auth files, sessions, or runtime state.
+
+#### New Agent Install
+
+Use this path when `FINAL_ROOT` does not exist, or when you selected a new unique final path.
+
+1. Validate `BUILD_ROOT`.
+2. Ensure `FINAL_ROOT` still does not exist.
+3. Install a new agent with an atomic same-filesystem rename from `BUILD_ROOT` to `FINAL_ROOT`.
+4. Run validation against `FINAL_ROOT`.
+
+#### Existing Agent Update
+
+Use this path only when the user explicitly asked to update an existing OpenClaw agent.
+
+1. Read the current target files from `FINAL_ROOT` before changing them.
+2. Compare the staged files in `BUILD_ROOT` against the current agent.
+3. Do not move or copy the whole staging directory over an existing agent.
+4. Patch only the selected files in FINAL_ROOT, preserving unrelated user edits and runtime state.
+5. Run validation against `FINAL_ROOT`.
+
+Final validation command:
+
+```bash
+python3 scripts/quality_check.py "$FINAL_ROOT"
+```
+
+#### Staging Cleanup
+
+- After a successful new-agent rename, remove the empty `.staging` parent only if it is empty.
+- If validation or install fails, keep BUILD_ROOT for inspection and report its path.
+- Never retry into the same BUILD_ROOT; start a new run with a new `RUN_ID`.
+
+Optional export: if the user also wants a portable copy, mirror the final workspace into a
+project-local `openclaw-workspace/[agent-name]/` directory after validation. The export is
+secondary; the live OpenClaw agent workspace is the source of truth.
 
 ## Conversion Modes
 

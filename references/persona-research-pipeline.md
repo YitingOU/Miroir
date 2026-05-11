@@ -28,10 +28,10 @@ and raw exports are higher signal than summaries.
 | 5. Decisions | Major decisions, reversals, crises, career moves | Decision context, stated logic, behavior vs claims, postmortems | `05-decisions.md` |
 | 6. Timeline | Full chronology and recent activity | Milestones, intellectual shifts, last-12-month changes for living people | `06-timeline.md` |
 
-Write all outputs under:
+Write all outputs under the staging build root:
 
 ```
-openclaw-workspace/[agent-name]/references/research/
+$BUILD_ROOT/references/research/
 ```
 
 ## Required Note Format
@@ -68,8 +68,11 @@ Hard rules:
 For subtitles:
 
 ```bash
-bash scripts/download_subtitles.sh <YouTube_URL> openclaw-workspace/[agent-name]/references/sources/transcripts
-python3 scripts/srt_to_transcript.py input.srt output.txt
+mkdir -p "$BUILD_ROOT/references/sources/transcripts"
+bash scripts/download_subtitles.sh <YouTube_URL> "$BUILD_ROOT/references/sources/transcripts"
+subtitle_file=$(find "$BUILD_ROOT/references/sources/transcripts" \( -name "*.srt" -o -name "*.vtt" \) -print -quit)
+transcript_file="$BUILD_ROOT/references/sources/transcripts/$(basename "${subtitle_file%.*}")_transcript.txt"
+python3 scripts/srt_to_transcript.py "$subtitle_file" "$transcript_file"
 ```
 
 ## Source Priority
@@ -102,7 +105,7 @@ Focus:
 - [lane-specific extraction targets]
 
 Output:
-- Write to openclaw-workspace/[agent-name]/references/research/[file-name].md
+- Write to `$BUILD_ROOT/references/research/[file-name].md`
 - Mark every claim as primary / secondary / inference.
 - Include URLs or local source paths.
 - Preserve contradictions and weak evidence.
@@ -114,7 +117,7 @@ Output:
 After all available lanes are complete, run:
 
 ```bash
-python3 scripts/merge_research.py openclaw-workspace/[agent-name]
+python3 scripts/merge_research.py "$BUILD_ROOT"
 ```
 
 Then summarize:

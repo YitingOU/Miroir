@@ -3,7 +3,11 @@
 Miroir is now a skill for generating OpenClaw agents.
 
 Input a person, operating role, existing perspective skill, or fuzzy need. The skill researches
-the source material, designs the agent contract, and writes a runnable OpenClaw workspace:
+the source material, designs the agent contract, and writes it directly to `~/openclaw-workspace/[agent-name]/`
+as a runnable OpenClaw agent workspace. It stages the build before installing it, using
+`~/openclaw-workspace/.staging/[agent-name]-[run-id]/`, so OpenClaw does
+not see a half-built agent if research or validation fails. OpenClaw must ignore the `.staging/`
+directory; otherwise use another non-scanned staging directory on the same filesystem:
 
 ```
 [agent-name]/
@@ -51,26 +55,27 @@ designed around that boundary, so operational rules are not buried in persona pr
 ## Workflow
 
 1. Route the request: persona, operator, skill conversion, update, or fuzzy diagnosis.
-2. Create an output skeleton under `openclaw-workspace/[agent-name]/`.
+2. Create a unique staging skeleton under `~/openclaw-workspace/.staging/[agent-name]-[run-id]/`.
 3. Choose an evidence mode: fast conversion, local-first, deep persona research, or operator research.
 4. Synthesize the agent contract: mission, voice, workflows, tools, memory, safety.
 5. Write the OpenClaw files using the template in `references/openclaw-agent-template.md`.
-6. Validate with `scripts/quality_check.py`.
-7. Export the directory, or install into a live OpenClaw workspace only when explicitly asked.
+6. Validate the staging workspace with `scripts/quality_check.py`.
+7. Install into a new unique live path under `~/openclaw-workspace/[agent-name]/`.
+8. Validate the final agent workspace and report the live path.
 
 ## Scripts
 
 ```bash
-# Validate a generated OpenClaw agent directory
-python3 scripts/quality_check.py openclaw-workspace/karpathy
+# Validate the final agent workspace
+python3 scripts/quality_check.py ~/openclaw-workspace/karpathy
 
 # Summarize research notes for the generation checkpoint
-python3 scripts/merge_research.py openclaw-workspace/karpathy
+python3 scripts/merge_research.py ~/openclaw-workspace/karpathy
 
 # Download YouTube subtitles for source collection
 bash scripts/download_subtitles.sh <YouTube_URL> sources/transcripts
 
-# Clean SRT/VTT subtitles into transcript text
+# Clean one SRT/VTT subtitle file into transcript text
 python3 scripts/srt_to_transcript.py input.srt output.txt
 ```
 
