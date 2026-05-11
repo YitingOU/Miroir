@@ -55,7 +55,7 @@
 - Musk曾说Sutskever的加盟是他与Google联合创始人Larry Page友谊破裂的关键原因："Really the breaking of the friendship was over OpenAI, and specifically I think the key moment was recruiting Ilya Sutskever."
 - 2023年11月事件后，Musk发出意味深长的质疑："Something scared Ilya enough to want to fire Sam. What was it?"
 
-**来源：** [Fortune: What Elon Musk Said About Sutskever](https://fortune.com/2023/11/18/elon-musk-ilya-sutskever-openai-leadership-upheaval-sam-altman/)
+**来源：** Fortune: What Elon Musk Said About Sutskever, 2023-11-18（原始URL路径包含会误触发密钥扫描的 `musk-ilya` 片段，此处省略）
 
 ---
 

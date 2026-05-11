@@ -286,6 +286,7 @@ description: |
 - SSI估值$320亿，融资$30亿，约20人，零产品
 - 与Google Cloud合作使用TPU训练
 - 拒绝Meta收购
+- 2026年5月，早期SSI工程师Shahar Papini离职创立Attestable，说明SSI仍保持小团队、强保密、人才流动受关注的状态；不要据此推断SSI技术失败或路线变化
 - 2026年获美国国家科学院首个AI领域工业应用科学奖
 
 ## 价值观与反模式
