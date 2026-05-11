@@ -1,152 +1,269 @@
 #!/usr/bin/env python3
 """
-自动检查生成的SKILL.md是否通过Phase 4质量标准。
-对照通过标准表格逐项检查，输出通过/不通过和具体原因。
+Validate an OpenClaw agent workspace.
 
-用法:
-    python3 quality_check.py <SKILL.md路径>
+Usage:
+    python3 scripts/quality_check.py <agent_dir>
 
-示例:
-    python3 quality_check.py .claude/skills/elon-musk-perspective/SKILL.md
+The checker is intentionally conservative. It fails on missing core files, hard size
+overruns, obvious placeholders, and likely secret leakage. It warns on weaker design
+signals that still need human judgment.
 """
 
-import sys
+from __future__ import annotations
+
 import re
+import sys
+from dataclasses import dataclass
 from pathlib import Path
 
 
-def check_mental_models(content: str) -> tuple[bool, str]:
-    """检查心智模型数量（3-7个）"""
-    # 匹配 ### 模型N: 或 ### N. 等模式
-    models = re.findall(r'^###\s+(?:模型|Model|心智模型)\s*\d', content, re.MULTILINE)
-    if not models:
-        # fallback: 数「### 」开头的行在心智模型section中
-        in_section = False
-        count = 0
-        for line in content.split('\n'):
-            if re.match(r'^##\s+.*心智模型|Mental Model', line, re.IGNORECASE):
-                in_section = True
-                continue
-            if in_section and re.match(r'^##\s+', line) and '心智模型' not in line:
-                break
-            if in_section and re.match(r'^###\s+', line):
-                count += 1
-        if count > 0:
-            passed = 3 <= count <= 7
-            return passed, f"{count}个心智模型 {'✅' if passed else '❌ (应为3-7个)'}"
-
-    count = len(models)
-    if count == 0:
-        return False, "未检测到心智模型section"
-    passed = 3 <= count <= 7
-    return passed, f"{count}个心智模型 {'✅' if passed else '❌ (应为3-7个)'}"
+@dataclass(frozen=True)
+class FileSpec:
+    name: str
+    target_chars: int
+    hard_chars: int = 20_000
 
 
-def check_limitations(content: str) -> tuple[bool, str]:
-    """检查每个模型是否有局限性"""
-    has_limitation = bool(re.search(r'局限|失效|不适用|盲区|limitation|blind spot', content, re.IGNORECASE))
-    return has_limitation, "有局限性标注 ✅" if has_limitation else "❌ 未找到局限性描述"
+CORE_FILES = [
+    FileSpec("IDENTITY.md", 500),
+    FileSpec("SOUL.md", 10_000),
+    FileSpec("AGENTS.md", 18_000),
+    FileSpec("USER.md", 5_000),
+    FileSpec("TOOLS.md", 15_000),
+    FileSpec("MEMORY.md", 20_000),
+    FileSpec("HEARTBEAT.md", 2_000),
+]
+
+PLACEHOLDER_RE = re.compile(
+    r"\b(TODO|TBD|FIXME|CHANGEME|REPLACE_ME)\b|"
+    r"\[(?:agent-id|agent-name|agent-root|display name|mission|role|trait|value|anti-pattern|"
+    r"path|condition|workflow|signals?|step|limit|date|optional|one sentence|"
+    r"tool or command convention|fallback path)[^\]]*\]",
+    re.IGNORECASE,
+)
+
+SECRET_RE = re.compile(
+    r"(sk-[A-Za-z0-9_-]{20,}|"
+    r"ghp_[A-Za-z0-9_]{20,}|"
+    r"github_pat_[A-Za-z0-9_]{20,}|"
+    r"xox[baprs]-[A-Za-z0-9-]{20,}|"
+    r"AKIA[0-9A-Z]{16}|"
+    r"-----BEGIN (?:RSA |OPENSSH |EC |DSA )?PRIVATE KEY-----|"
+    r"(?:api[_-]?key|secret|token|password)\s*[:=]\s*['\"][^'\"]{12,}['\"])",
+    re.IGNORECASE,
+)
 
 
-def check_expression_dna(content: str) -> tuple[bool, str]:
-    """检查表达DNA辨识度"""
-    dna_section = bool(re.search(r'表达DNA|Expression DNA|表达风格', content, re.IGNORECASE))
-    if not dna_section:
-        return False, "❌ 未找到表达DNA section"
+class Reporter:
+    def __init__(self) -> None:
+        self.failures: list[str] = []
+        self.warnings: list[str] = []
 
-    # 检查是否有具体的风格描述（句式、词汇等）
-    style_markers = len(re.findall(r'句式|词汇|语气|幽默|节奏|确定性|引用|口头禅', content))
-    passed = style_markers >= 3
-    return passed, f"表达DNA特征: {style_markers}项 {'✅' if passed else '❌ (应≥3项)'}"
+    def pass_(self, message: str) -> None:
+        print(f"PASS  {message}")
 
+    def warn(self, message: str) -> None:
+        self.warnings.append(message)
+        print(f"WARN  {message}")
 
-def check_honest_boundary(content: str) -> tuple[bool, str]:
-    """检查诚实边界（至少3条）"""
-    # 找诚实边界section
-    boundary_match = re.search(r'(?:##\s+.*诚实边界|## Honest Boundary)(.*?)(?=\n##\s|\Z)', content, re.DOTALL | re.IGNORECASE)
-    if not boundary_match:
-        return False, "❌ 未找到诚实边界section"
-
-    boundary_text = boundary_match.group(1)
-    # 计算列表项
-    items = re.findall(r'^[-*]\s+', boundary_text, re.MULTILINE)
-    count = len(items)
-    passed = count >= 3
-    return passed, f"诚实边界: {count}条 {'✅' if passed else '❌ (应≥3条)'}"
+    def fail(self, message: str) -> None:
+        self.failures.append(message)
+        print(f"FAIL  {message}")
 
 
-def check_tensions(content: str) -> tuple[bool, str]:
-    """检查内在张力（至少2对）"""
-    tension_markers = len(re.findall(r'张力|矛盾|tension|paradox|一方面.*另一方面|既.*又', content, re.IGNORECASE))
-    passed = tension_markers >= 2
-    return passed, f"内在张力: {tension_markers}处 {'✅' if passed else '❌ (应≥2处)'}"
+def read_text(path: Path) -> str:
+    return path.read_text(encoding="utf-8")
 
 
-def check_primary_sources(content: str) -> tuple[bool, str]:
-    """检查一手来源占比"""
-    # 找调研来源section
-    source_section = re.search(r'(?:##\s+.*来源|## Source|## Reference)(.*?)(?=\n##\s|\Z)', content, re.DOTALL | re.IGNORECASE)
-    if not source_section:
-        return True, "未找到来源section（跳过检查）"
+def check_core_files(agent_dir: Path, reporter: Reporter) -> dict[str, str]:
+    contents: dict[str, str] = {}
 
-    source_text = source_section.group(1)
-    primary = len(re.findall(r'一手|primary|本人著作|原始', source_text, re.IGNORECASE))
-    secondary = len(re.findall(r'二手|secondary|转述|评论', source_text, re.IGNORECASE))
-    total = primary + secondary
-    if total == 0:
-        return True, "未标记来源类型（跳过检查）"
+    for spec in CORE_FILES:
+        path = agent_dir / spec.name
+        if not path.exists():
+            reporter.fail(f"missing required file: {spec.name}")
+            continue
 
-    ratio = primary / total
-    passed = ratio > 0.5
-    return passed, f"一手来源占比: {primary}/{total} ({ratio:.0%}) {'✅' if passed else '❌ (应>50%)'}"
+        content = read_text(path)
+        contents[spec.name] = content
+        size = len(content)
+
+        if size > spec.hard_chars:
+            reporter.fail(f"{spec.name} is {size} chars, over hard OpenClaw limit {spec.hard_chars}")
+        elif size > spec.target_chars:
+            reporter.warn(f"{spec.name} is {size} chars, over target {spec.target_chars}")
+        else:
+            reporter.pass_(f"{spec.name} exists and size is within target ({size}/{spec.target_chars})")
+
+    return contents
 
 
-def main():
-    if len(sys.argv) < 2:
-        print("用法: python3 quality_check.py <SKILL.md路径>")
-        sys.exit(1)
+def check_identity(contents: dict[str, str], reporter: Reporter) -> None:
+    text = contents.get("IDENTITY.md", "")
+    for marker in ("Name", "Agent ID", "Role"):
+        if marker.lower() not in text.lower():
+            reporter.warn(f"IDENTITY.md does not mention {marker}")
 
-    skill_path = Path(sys.argv[1])
-    if not skill_path.exists():
-        print(f"❌ 文件不存在: {skill_path}")
-        sys.exit(1)
+    if "One-Line Signal" in text or "one-line" in text.lower():
+        reporter.pass_("IDENTITY.md includes a one-line signal")
+    else:
+        reporter.warn("IDENTITY.md should include a one-line signal")
 
-    content = skill_path.read_text(encoding='utf-8')
 
-    checks = [
-        ("心智模型数量", check_mental_models),
-        ("模型局限性", check_limitations),
-        ("表达DNA辨识度", check_expression_dna),
-        ("诚实边界", check_honest_boundary),
-        ("内在张力", check_tensions),
-        ("一手来源占比", check_primary_sources),
+def check_operational_boundaries(contents: dict[str, str], reporter: Reporter) -> None:
+    agents = contents.get("AGENTS.md", "")
+    tools = contents.get("TOOLS.md", "")
+    soul = contents.get("SOUL.md", "")
+    heartbeat = contents.get("HEARTBEAT.md", "")
+
+    required_agents_markers = {
+        "startup": r"\bStartup\b|启动",
+        "request routing": r"Request Routing|Answer Protocol|请求|路由|classify",
+        "memory": r"\bMemory\b|记忆|memory/YYYY",
+        "safety": r"\bSafety\b|安全|approval|确认",
+    }
+
+    for label, pattern in required_agents_markers.items():
+        if re.search(pattern, agents, re.IGNORECASE):
+            reporter.pass_(f"AGENTS.md contains {label} guidance")
+        else:
+            reporter.fail(f"AGENTS.md missing {label} guidance")
+
+    if re.search(r"subagents?|子[ -]?agent|delegation|spawn", agents, re.IGNORECASE):
+        reporter.pass_("AGENTS.md mentions subagent/delegation visibility")
+    else:
+        reporter.warn("AGENTS.md should mention that subagents only see AGENTS.md and TOOLS.md")
+
+    if re.search(r"Local Paths|Tool Use|工具|命令|CLI|API|env", tools, re.IGNORECASE):
+        reporter.pass_("TOOLS.md contains concrete tool/path guidance")
+    else:
+        reporter.warn("TOOLS.md looks too thin for subagents")
+
+    operational_terms_in_soul = len(
+        re.findall(r"spawn|subagent|memory/YYYY|rm -rf|deploy|API|CLI|TOOL|workflow", soul, re.IGNORECASE)
+    )
+    if operational_terms_in_soul > 12:
+        reporter.warn("SOUL.md appears to contain operational detail; move workflow rules to AGENTS.md")
+    else:
+        reporter.pass_("SOUL.md is not overloaded with operational detail")
+
+    if len(heartbeat) > 2_000:
+        reporter.fail("HEARTBEAT.md is too large for heartbeat context")
+    elif "No proactive heartbeat work is configured" in heartbeat or "HEARTBEAT_OK" in heartbeat:
+        reporter.pass_("HEARTBEAT.md uses safe no-proactive default")
+    else:
+        reporter.warn("HEARTBEAT.md configures proactive work; confirm this was user-requested")
+
+
+def check_placeholders_and_secrets(agent_dir: Path, reporter: Reporter) -> None:
+    text_files = [
+        path
+        for path in agent_dir.rglob("*")
+        if path.is_file()
+        and path.suffix.lower() in {".md", ".txt", ".json", ".yaml", ".yml", ".toml"}
+        and "sessions" not in path.parts
     ]
 
-    print(f"质量检查: {skill_path.name}")
-    print("=" * 50)
+    placeholder_files = [
+        agent_dir / spec.name for spec in CORE_FILES if (agent_dir / spec.name).exists()
+    ]
+    research_dir = agent_dir / "references" / "research"
+    if research_dir.exists():
+        placeholder_files.extend(sorted(research_dir.glob("*.md")))
 
-    passed_count = 0
-    total = len(checks)
+    placeholder_hits: list[str] = []
+    secret_hits: list[str] = []
+    stale_path_hits: list[str] = []
 
-    for name, check_fn in checks:
-        passed, detail = check_fn(content)
-        status = "✅ PASS" if passed else "❌ FAIL"
-        print(f"  {name:<12} {status}  {detail}")
-        if passed:
-            passed_count += 1
+    for path in placeholder_files:
+        text = read_text(path)
+        rel = path.relative_to(agent_dir)
+        if PLACEHOLDER_RE.search(text):
+            placeholder_hits.append(str(rel))
 
-    print("=" * 50)
-    print(f"结果: {passed_count}/{total} 通过")
+    for path in text_files:
+        text = read_text(path)
+        rel = path.relative_to(agent_dir)
+        if SECRET_RE.search(text):
+            secret_hits.append(str(rel))
+        if re.search(r"/Users/(?:alchain|macmini|[^/\s]+/Documents/写作)", text):
+            stale_path_hits.append(str(rel))
 
-    if passed_count == total:
-        print("🎉 全部通过，可以交付")
-    elif passed_count >= total - 1:
-        print("⚠️ 基本通过，建议修复不通过项后交付")
+    if placeholder_hits:
+        reporter.fail("placeholder text remains in: " + ", ".join(sorted(set(placeholder_hits))[:8]))
     else:
-        print("❌ 多项不通过，建议回到Phase 2迭代")
+        reporter.pass_("no obvious placeholders found")
 
-    sys.exit(0 if passed_count == total else 1)
+    if secret_hits:
+        reporter.fail("possible secret material found in: " + ", ".join(sorted(set(secret_hits))[:8]))
+    else:
+        reporter.pass_("no obvious secrets found")
+
+    if stale_path_hits:
+        reporter.warn("stale author-local paths found in: " + ", ".join(sorted(set(stale_path_hits))[:8]))
+    else:
+        reporter.pass_("no stale author-local paths found")
 
 
-if __name__ == '__main__':
-    main()
+def check_runtime_state(agent_dir: Path, reporter: Reporter) -> None:
+    forbidden_names = {
+        "auth-state.json",
+        "auth.json",
+        "credentials.json",
+        "sessions.json",
+        "openclaw.json",
+    }
+    hits = [path.relative_to(agent_dir) for path in agent_dir.rglob("*") if path.is_file() and path.name in forbidden_names]
+
+    if hits:
+        reporter.fail("runtime/auth state should not be bundled: " + ", ".join(map(str, hits[:8])))
+    else:
+        reporter.pass_("no bundled auth/session state files found")
+
+
+def check_references(agent_dir: Path, reporter: Reporter) -> None:
+    research_dir = agent_dir / "references" / "research"
+    if not research_dir.exists():
+        reporter.warn("references/research/ is missing; acceptable only for simple hand-authored agents")
+        return
+
+    notes = sorted(research_dir.glob("*.md"))
+    if not notes:
+        reporter.warn("references/research/ exists but has no markdown notes")
+        return
+
+    reporter.pass_(f"references/research contains {len(notes)} markdown note(s)")
+
+
+def main() -> int:
+    if len(sys.argv) != 2:
+        print("Usage: python3 scripts/quality_check.py <agent_dir>")
+        return 2
+
+    agent_dir = Path(sys.argv[1]).expanduser().resolve()
+    reporter = Reporter()
+
+    print(f"OpenClaw agent quality check: {agent_dir}")
+    print("=" * 72)
+
+    if not agent_dir.exists() or not agent_dir.is_dir():
+        reporter.fail(f"agent directory does not exist: {agent_dir}")
+    else:
+        contents = check_core_files(agent_dir, reporter)
+        check_identity(contents, reporter)
+        check_operational_boundaries(contents, reporter)
+        check_placeholders_and_secrets(agent_dir, reporter)
+        check_runtime_state(agent_dir, reporter)
+        check_references(agent_dir, reporter)
+
+    print("=" * 72)
+    print(f"Failures: {len(reporter.failures)}  Warnings: {len(reporter.warnings)}")
+
+    if reporter.failures:
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
